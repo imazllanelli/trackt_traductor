@@ -10,10 +10,9 @@ app.use(cors());
 const TRAKT_CLIENT_ID = process.env.TRAKT_CLIENT_ID;
 const TRAKT_BASE_URL = 'https://api.trakt.tv';
 
-// Traductor con Google Translate (bloques cortos y fiables)
 async function translateToSpanish(text) {
   if (!text || text.trim() === '') return text;
-  const cleanText = text.substring(0, 800);
+  const cleanText = text.substring(0, 1000);
   try {
     const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=es&dt=t&q=${encodeURIComponent(cleanText)}`;
     const response = await axios.get(url);
@@ -26,32 +25,17 @@ async function translateToSpanish(text) {
   }
 }
 
-// Manifiesto del Addon
-app.get('/manifest.json', (req, res) => {
-  res.json({
-    id: 'community.trakt.es.reviews',
-    version: '1.0.1',
-    name: 'Reseñas Trakt en Español',
-    description: 'Añade reseñas y opiniones de Trakt en castellano a la sinopsis',
-    resources: ['meta'],
-    types: ['movie', 'series'],
-    idPrefixes: ['tt']
-  });
-});
-
-// Endpoint que captura la ficha al abrirla en Nuvio
-app.get('/meta/:type/:id.json', async (req, res) => {
+// Acepta tanto /comments como /comments/likes (o cualquier ordenación)
+app.get('/:type/:id/comments*', async (req, res) => {
   const { type, id } = req.params;
-  const cleanId = id.replace('.json', '');
-  const traktType = type === 'series' ? 'shows' : 'movies';
+  const sort = req.params[0] ? req.params[0].replace('/', '') : 'likes';
 
   if (!TRAKT_CLIENT_ID) {
-    return res.json({ meta: { id: cleanId, type } });
+    return res.status(500).json({ error: 'Falta TRAKT_CLIENT_ID' });
   }
 
   try {
-    // 1. Obtener comentarios usando el ID de IMDb directamente en Trakt
-    const traktRes = await axios.get(`${TRAKT_BASE_URL}/${traktType}/${cleanId}/comments/likes`, {
+    const traktRes = await axios.get(`${TRAKT_BASE_URL}/${type}/${id}/comments/${sort || 'likes'}`, {
       headers: {
         'Content-Type': 'application/json',
         'trakt-api-version': '2',
@@ -59,33 +43,26 @@ app.get('/meta/:type/:id.json', async (req, res) => {
       }
     });
 
-    const comments = (traktRes.data || []).slice(0, 3);
-    if (comments.length === 0) {
-      return res.json({ meta: { id: cleanId, type } });
-    }
+    const comments = traktRes.data || [];
+    // Traducimos los 15 primeros para no demorar la respuesta en Nuvio
+    const topComments = comments.slice(0, 15);
+    const translated = await Promise.all(
+      topComments.map(async (item) => {
+        const textEs = await translateToSpanish(item.comment);
+        return {
+          ...item,
+          comment: textEs
+        };
+      })
+    );
 
-    let reviewsText = '\n\n━━━━━━━━━━━━━━━━━━━━\n💬 CRÍTICAS EN CASTELLANO (TRAKT):\n';
-
-    for (const item of comments) {
-      const translated = await translateToSpanish(item.comment);
-      const rating = item.user_rating ? ` (${item.user_rating}/10 ⭐)` : '';
-      reviewsText += `\n👤 @${item.user?.username || 'Usuario'}${rating}:\n"${translated}"\n`;
-    }
-
-    res.json({
-      meta: {
-        id: cleanId,
-        type: type,
-        description: reviewsText
-      }
-    });
+    res.json(translated);
   } catch (error) {
-    res.json({ meta: { id: cleanId, type } });
+    console.error('Error Trakt:', error.response?.data || error.message);
+    res.status(error.response?.status || 500).json([]);
   }
 });
 
-app.get('/', (req, res) => {
-  res.send('Servicio activo. Instala mediante /manifest.json');
-});
+app.get('/', (req, res) => res.send('OK'));
 
 app.listen(PORT, () => console.log(`Puerto ${PORT}`));
