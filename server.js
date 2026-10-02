@@ -10,11 +10,10 @@ app.use(cors());
 const TRAKT_CLIENT_ID = process.env.TRAKT_CLIENT_ID;
 const TRAKT_BASE_URL = 'https://api.trakt.tv';
 
-// Traductor ligero usando la API pública de Google Translate
+// Traductor con Google Translate (bloques cortos y fiables)
 async function translateToSpanish(text) {
   if (!text || text.trim() === '') return text;
-  // Recortamos a un tamaño razonable para no saturar
-  const cleanText = text.substring(0, 1000);
+  const cleanText = text.substring(0, 800);
   try {
     const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=es&dt=t&q=${encodeURIComponent(cleanText)}`;
     const response = await axios.get(url);
@@ -27,26 +26,31 @@ async function translateToSpanish(text) {
   }
 }
 
-// 1. Manifiesto del Addon para Nuvio / Stremio
+// Manifiesto del Addon
 app.get('/manifest.json', (req, res) => {
   res.json({
     id: 'community.trakt.es.reviews',
-    version: '1.0.0',
+    version: '1.0.1',
     name: 'Reseñas Trakt en Español',
-    description: 'Muestra las críticas y comentarios de Trakt traducidos al castellano',
+    description: 'Añade reseñas y opiniones de Trakt en castellano a la sinopsis',
     resources: ['meta'],
     types: ['movie', 'series'],
-    catalogs: []
+    idPrefixes: ['tt']
   });
 });
 
-// 2. Endpoint de metadatos (inyecta las reseñas en la descripción)
+// Endpoint que captura la ficha al abrirla en Nuvio
 app.get('/meta/:type/:id.json', async (req, res) => {
   const { type, id } = req.params;
   const cleanId = id.replace('.json', '');
   const traktType = type === 'series' ? 'shows' : 'movies';
 
+  if (!TRAKT_CLIENT_ID) {
+    return res.json({ meta: { id: cleanId, type } });
+  }
+
   try {
+    // 1. Obtener comentarios usando el ID de IMDb directamente en Trakt
     const traktRes = await axios.get(`${TRAKT_BASE_URL}/${traktType}/${cleanId}/comments/likes`, {
       headers: {
         'Content-Type': 'application/json',
@@ -55,13 +59,17 @@ app.get('/meta/:type/:id.json', async (req, res) => {
       }
     });
 
-    const comments = traktRes.data.slice(0, 4); // Tomamos las 4 mejores reseñas
-    let reviewsText = '\n\n💬 CRÍTICAS Y OPINIONES (TRAKT EN ESPAÑOL):\n';
+    const comments = (traktRes.data || []).slice(0, 3);
+    if (comments.length === 0) {
+      return res.json({ meta: { id: cleanId, type } });
+    }
+
+    let reviewsText = '\n\n━━━━━━━━━━━━━━━━━━━━\n💬 CRÍTICAS EN CASTELLANO (TRAKT):\n';
 
     for (const item of comments) {
       const translated = await translateToSpanish(item.comment);
-      const userRating = item.user_rating ? `⭐ ${item.user_rating}/10` : '';
-      reviewsText += `\n👤 @${item.user.username} ${userRating}:\n"${translated}"\n`;
+      const rating = item.user_rating ? ` (${item.user_rating}/10 ⭐)` : '';
+      reviewsText += `\n👤 @${item.user?.username || 'Usuario'}${rating}:\n"${translated}"\n`;
     }
 
     res.json({
@@ -72,37 +80,12 @@ app.get('/meta/:type/:id.json', async (req, res) => {
       }
     });
   } catch (error) {
-    res.json({ meta: { id: cleanId, type: type } });
-  }
-});
-
-// 3. Endpoint tipo API proxy original (por si se consulta directo)
-app.get('/:type/:id/comments', async (req, res) => {
-  const { type, id } = req.params;
-  try {
-    const traktRes = await axios.get(`${TRAKT_BASE_URL}/${type}/${id}/comments/likes`, {
-      headers: {
-        'Content-Type': 'application/json',
-        'trakt-api-version': '2',
-        'trakt-api-key': TRAKT_CLIENT_ID
-      }
-    });
-
-    const comments = traktRes.data.slice(0, 5);
-    const translated = await Promise.all(
-      comments.map(async (item) => {
-        const textEs = await translateToSpanish(item.comment);
-        return { ...item, comment: textEs };
-      })
-    );
-    res.json(translated);
-  } catch (e) {
-    res.status(500).json({ error: 'Error' });
+    res.json({ meta: { id: cleanId, type } });
   }
 });
 
 app.get('/', (req, res) => {
-  res.send('Addon de Trakt en Español activo. Instálalo con /manifest.json');
+  res.send('Servicio activo. Instala mediante /manifest.json');
 });
 
-app.listen(PORT, () => console.log(`Servidor en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`Puerto ${PORT}`));
