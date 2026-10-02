@@ -25,13 +25,26 @@ async function translateToSpanish(text) {
   }
 }
 
-// Acepta tanto /comments como /comments/likes (o cualquier ordenación)
+// Manifiesto por si se instala como addon
+app.get('/manifest.json', (req, res) => {
+  res.json({
+    id: 'community.trakt.es.reviews',
+    version: '1.0.2',
+    name: 'Reseñas Trakt en Español',
+    description: 'Comentarios de Trakt traducidos al castellano',
+    resources: ['meta'],
+    types: ['movie', 'series'],
+    idPrefixes: ['tt']
+  });
+});
+
+// Captura cualquier petición de comentarios de Nuvio (/comments, /comments/likes, etc.)
 app.get('/:type/:id/comments*', async (req, res) => {
   const { type, id } = req.params;
   const sort = req.params[0] ? req.params[0].replace('/', '') : 'likes';
 
   if (!TRAKT_CLIENT_ID) {
-    return res.status(500).json({ error: 'Falta TRAKT_CLIENT_ID' });
+    return res.status(500).json([]);
   }
 
   try {
@@ -44,7 +57,6 @@ app.get('/:type/:id/comments*', async (req, res) => {
     });
 
     const comments = traktRes.data || [];
-    // Traducimos los 15 primeros para no demorar la respuesta en Nuvio
     const topComments = comments.slice(0, 15);
     const translated = await Promise.all(
       topComments.map(async (item) => {
@@ -58,8 +70,7 @@ app.get('/:type/:id/comments*', async (req, res) => {
 
     res.json(translated);
   } catch (error) {
-    console.error('Error Trakt:', error.response?.data || error.message);
-    res.status(error.response?.status || 500).json([]);
+    res.status(500).json([]);
   }
 });
 
